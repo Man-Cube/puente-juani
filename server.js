@@ -24,13 +24,12 @@ app.post('/modificar-precio', async (req, res) => {
             console.log("¡Scanntech aceptó el cambio de precio!");
             res.json({ exito: true });
         } else {
+            // Agregamos estas tres líneas para que cante todo
+            const motivo = await respuestaScanntech.text();
+            console.log("Scanntech rebotó. Código:", respuestaScanntech.status);
+            console.log("Motivo exacto:", motivo);
             res.status(400).json({ exito: false });
         }
-    } catch (error) {
-        console.error("Error en el puente:", error);
-        res.status(500).json({ exito: false });
-    }
-});
 
 // Render nos dice en qué puerto arrancar
 const PORT = process.env.PORT || 3000;
