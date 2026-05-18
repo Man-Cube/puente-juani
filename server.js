@@ -12,7 +12,7 @@ const headersScanntech = {
     "gestion": "1222"
 };
 
-// EL BUSCADOR INTELIGENTE EN 2 PASOS
+// 1. BUSCADOR INTELIGENTE EN 2 PASOS
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
     try {
@@ -39,11 +39,11 @@ app.get('/buscar/:codigo', async (req, res) => {
 
         res.json({ exito: true, articulo: articuloCompleto });
     } catch (error) {
-        res.status(500).json({ exito: false, error: "Error interno" });
+        res.status(500).json({ exito: false, error: "Error interno en buscador" });
     }
 });
 
-// EL ACTUALIZADOR DE PRECIOS
+// 2. ACTUALIZADOR DE PRECIOS
 app.post('/modificar-precio', async (req, res) => {
     console.log("¡Recibida orden de actualización de precio!");
     try {
@@ -55,25 +55,24 @@ app.post('/modificar-precio', async (req, res) => {
 
         if (respuestaScanntech.ok) {
             const respuestaJSON = await respuestaScanntech.json();
-            console.log("¡Cambio exitoso! Respuesta de Scanntech:", JSON.stringify(respuestaJSON));
+            console.log("¡Cambio de precio exitoso! Respuesta:", JSON.stringify(respuestaJSON));
             res.json({ exito: true, data: respuestaJSON });
         } else {
             const motivo = await respuestaScanntech.text();
-            console.log("Scanntech rebotó. Error:", respuestaScanntech.status, motivo);
+            console.log("Scanntech rebotó precio. Error:", respuestaScanntech.status, motivo);
             res.status(400).json({ exito: false });
         }
     } catch (error) {
-        console.error("Error en escritura:", error);
+        console.error("Error en escritura de precio:", error);
         res.status(500).json({ exito: false });
     }
 });
 
-// EL CAÑÓN: DISTRIBUIR A CAJAS
+// 3. CAÑÓN DE DISTRIBUCIÓN A CAJAS
 app.post('/distribuir', async (req, res) => {
     console.log("¡Orden de distribución a cajas recibida!");
     try {
         const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
-
         const respuestaDist = await fetch(urlDistribucion, {
             method: "PUT",
             headers: headersScanntech,
@@ -85,11 +84,36 @@ app.post('/distribuir', async (req, res) => {
             res.json({ exito: true });
         } else {
             const motivo = await respuestaDist.text();
-            console.log("Rebotó la distribución. Error:", respuestaDist.status, motivo);
+            console.log("Rebotó distribución. Error:", respuestaDist.status, motivo);
             res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
         console.error("Error al distribuir:", error);
+        res.status(500).json({ exito: false });
+    }
+});
+
+// 4. NUEVO CAÑÓN: MOVIMIENTOS DE INVENTARIO (STOCK)
+app.post('/actualizar-stock', async (req, res) => {
+    console.log("¡Recibida orden de movimiento de stock!");
+    try {
+        const urlStock = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-inventario-angular/api/movimiento";
+        const respuestaStock = await fetch(urlStock, {
+            method: "POST",
+            headers: headersScanntech,
+            body: JSON.stringify(req.body)
+        });
+
+        if (respuestaStock.ok) {
+            console.log("¡Movimiento de stock impactado en Scanntech!");
+            res.json({ exito: true });
+        } else {
+            const motivo = await respuestaStock.text();
+            console.log("Scanntech rebotó el stock. Error:", respuestaStock.status, motivo);
+            res.status(400).json({ exito: false, error: motivo });
+        }
+    } catch (error) {
+        console.error("Error en conexión de stock:", error);
         res.status(500).json({ exito: false });
     }
 });
