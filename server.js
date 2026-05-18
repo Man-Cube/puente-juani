@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 
-const app = express();
+const app = report || express();
 app.use(cors()); 
 app.use(express.json()); 
 
@@ -12,7 +12,7 @@ const headersScanntech = {
     "gestion": "1222"
 };
 
-// EL BUSCADOR INTELIGENTE EN 2 PASOS
+// 1. EL BUSCADOR EN 2 PASOS (Intacto)
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
     try {
@@ -43,9 +43,9 @@ app.get('/buscar/:codigo', async (req, res) => {
     }
 });
 
-// EL ACTUALIZADOR
+// 2. EL ACTUALIZADOR DE PRECIOS Y COSTOS (Intacto)
 app.post('/modificar-precio', async (req, res) => {
-    console.log("¡Recibida orden de actualización de precio!");
+    console.log("¡Recibida orden de precio!");
     try {
         const respuestaScanntech = await fetch("https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/salvar-lote", {
             method: "PUT",
@@ -55,46 +55,58 @@ app.post('/modificar-precio', async (req, res) => {
 
         if (respuestaScanntech.ok) {
             const respuestaJSON = await respuestaScanntech.json();
-            console.log("¡Cambio exitoso! Respuesta de Scanntech:", JSON.stringify(respuestaJSON));
             res.json({ exito: true, data: respuestaJSON });
         } else {
-            const motivo = await respuestaScanntech.text();
-            console.log("Scanntech rebotó. Error:", respuestaScanntech.status, motivo);
             res.status(400).json({ exito: false });
         }
     } catch (error) {
-        console.error("Error en escritura:", error);
         res.status(500).json({ exito: false });
     }
 });
 
-// EL CAÑÓN: DISTRIBUIR A CAJAS
+// 3. EL DISTRIBUIDOR A CAJAS (Intacto)
 app.post('/distribuir', async (req, res) => {
-    console.log("¡Orden de distribución a cajas recibida!");
+    console.log("¡Orden de distribución recibida!");
     try {
         const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
-
         const respuestaDist = await fetch(urlDistribucion, {
-            method: "PUT", // ¡AQUÍ ESTÁ LA MAGIA, ERA PUT Y NO POST!
+            method: "PUT",
+            headers: headersScanntech,
+            body: JSON.stringify(req.body)
+        });
+        if (respuestaDist.ok) res.json({ exito: true });
+        else res.status(400).json({ exito: false });
+    } catch (error) {
+        res.status(500).json({ exito: false });
+    }
+});
+
+// 4. NUEVO CAÑÓN: AJUSTE DE STOCK DE MERCADERÍA 📦
+app.post('/ajustar-stock', async (req, res) => {
+    console.log("¡Recibida orden de ajuste de inventario, Chacho!");
+    try {
+        const urlInventario = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-inventario-angular/api/movimiento";
+        const respuestaStock = await fetch(urlInventario, {
+            method: "POST",
             headers: headersScanntech,
             body: JSON.stringify(req.body)
         });
 
-        if (respuestaDist.ok) {
-            console.log("¡Distribución exitosa!");
+        if (respuestaStock.ok) {
+            console.log("¡Ajuste de stock impactado con éxito en Scanntech!");
             res.json({ exito: true });
         } else {
-            const motivo = await respuestaDist.text();
-            console.log("Rebotó la distribución. Error:", respuestaDist.status, motivo);
+            const motivo = await respuestaStock.text();
+            console.log("Scanntech rebotó el stock. Código:", respuestaStock.status, motivo);
             res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
-        console.error("Error al distribuir:", error);
+        console.error("Error en puente de inventario:", error);
         res.status(500).json({ exito: false });
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Servidor ACTIVO en el puerto ${PORT}`);
+    console.log(`Servidor de Autoservicio Juani ACTIVO en puerto ${PORT}`);
 });
