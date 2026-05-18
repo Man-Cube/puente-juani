@@ -12,7 +12,7 @@ const headersScanntech = {
     "gestion": "1222"
 };
 
-// EL BUSCADOR INTELIGENTE EN 2 PASOS (Intacto)
+// EL BUSCADOR INTELIGENTE EN 2 PASOS
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
     try {
@@ -43,7 +43,7 @@ app.get('/buscar/:codigo', async (req, res) => {
     }
 });
 
-// EL ACTUALIZADOR CON RADAR DE NÚMEROS DE DISTRIBUCIÓN
+// EL ACTUALIZADOR
 app.post('/modificar-precio', async (req, res) => {
     console.log("¡Recibida orden de actualización de precio!");
     try {
@@ -54,7 +54,6 @@ app.post('/modificar-precio', async (req, res) => {
         });
 
         if (respuestaScanntech.ok) {
-            // ACÁ ESTÁ EL RADAR: Imprimimos qué nos devuelve Scanntech al guardar
             const respuestaJSON = await respuestaScanntech.json();
             console.log("¡Cambio exitoso! Respuesta de Scanntech:", JSON.stringify(respuestaJSON));
             res.json({ exito: true, data: respuestaJSON });
@@ -69,14 +68,14 @@ app.post('/modificar-precio', async (req, res) => {
     }
 });
 
-// EL NUEVO CAÑÓN: DISTRIBUIR A CAJAS
+// EL CAÑÓN: DISTRIBUIR A CAJAS
 app.post('/distribuir', async (req, res) => {
     console.log("¡Orden de distribución a cajas recibida!");
     try {
         const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
 
         const respuestaDist = await fetch(urlDistribucion, {
-            method: "POST", // Usamos POST. Si el F12 te decía PUT, me avisás y lo cambiamos
+            method: "PUT", // ¡AQUÍ ESTÁ LA MAGIA, ERA PUT Y NO POST!
             headers: headersScanntech,
             body: JSON.stringify(req.body)
         });
