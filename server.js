@@ -112,19 +112,18 @@ app.post('/actualizar-stock', async (req, res) => {
     }
 });
 
-// 7. NUEVO CAÑÓN: DESCARGAR PDF DE ETIQUETAS OFICIAL
+// 7. NUEVO CAÑÓN: DESCARGAR PDF DE ETIQUETAS OFICIAL (¡AHORA CON PUT!)
 app.post('/imprimir-etiquetas', async (req, res) => {
     console.log("¡Pedida generación de PDF original a Scanntech!");
     try {
         const urlImprimir = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-imprimir-etiquetas-angular_1.2.3/api/etiquetas/imprimir";
         const respuestaScanntech = await fetch(urlImprimir, {
-            method: "POST",
+            method: "PUT", // <--- ¡LA MAGIA ESTÁ ACÁ! 
             headers: headersScanntech,
             body: JSON.stringify(req.body)
         });
 
         if (respuestaScanntech.ok) {
-            // Recibimos el archivo binario y le avisamos al celular que es un PDF original
             res.setHeader("Content-Type", "application/pdf");
             const buffer = await respuestaScanntech.arrayBuffer();
             res.send(Buffer.from(buffer));
