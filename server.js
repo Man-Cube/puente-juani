@@ -16,13 +16,11 @@ const headersScanntech = {
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
     try {
-        // Intento A: Buscar por Código de Barras
         let urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoBarras%253AEQ%253A${codigoLeido}`;
         let resBasica = await fetch(urlBasica, { method: "GET", headers: headersScanntech });
         let dataBasica = await resBasica.json();
         let art = dataBasica.content && dataBasica.content.length > 0 ? dataBasica.content[0] : (Array.isArray(dataBasica) && dataBasica.length > 0 ? dataBasica[0] : null);
 
-        // Intento B: Si falló, buscar por Código Externo / PLU (Caso Quesos/Fiambres)
         if (!art || !art.codigo) {
             urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoExterno%253AEQ%253A${codigoLeido}`;
             resBasica = await fetch(urlBasica, { method: "GET", headers: headersScanntech });
@@ -41,22 +39,19 @@ app.get('/buscar/:codigo', async (req, res) => {
 
         res.json({ exito: true, articulo: articuloCompleto });
     } catch (error) {
-        console.error("Error buscando código:", error);
         res.status(500).json({ exito: false, error: "Error interno en buscador" });
     }
 });
 
-// 2. BUSCADOR DIRECTO POR ID INTERNO (EVITA ERRORES EN LISTAS DE TEXTO)
+// 2. BUSCADOR DIRECTO POR ID INTERNO
 app.get('/buscar-id/:id', async (req, res) => {
     const codigoInterno = req.params.id;
     try {
         const urlPesada = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}?disponibilidadDistribucion=%7B%22fecha%22:null,%22tipoDisponibilidadDistribucion%22:%22IMMEDIATE%22%7D&filter=codigoListaPrecioVenta%253AEQ%253A3163`;
         const resPesada = await fetch(urlPesada, { method: "GET", headers: headersScanntech });
-        const articuloCompleto = await resPesada.json();
-        res.json({ exito: true, articulo: articuloCompleto });
+        res.json({ exito: true, articulo: await resPesada.json() });
     } catch (error) {
-        console.error("Error trayendo ID:", error);
-        res.status(500).json({ exito: false, error: "Error interno al traer ficha" });
+        res.status(500).json({ exito: false });
     }
 });
 
@@ -67,10 +62,9 @@ app.get('/buscar-texto/:texto', async (req, res) => {
         const urlTexto = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos-buscador?filter=descripcion%253ALIKE%253A${textoBusqueda}%252CincluirCombos%253AEQ%253Atrue&orderBy=desc(descripcion)&estado=ACTIVAS&initialRow=0&rowCount=50`;
         const respuesta = await fetch(urlTexto, { method: "GET", headers: headersScanntech });
         const data = await respuesta.json();
-        const resultados = data.content ? data.content : (Array.isArray(data) ? data : []);
-        res.json({ exito: true, resultados: resultados });
+        res.json({ exito: true, resultados: data.content || data || [] });
     } catch (error) {
-        res.status(500).json({ exito: false, error: "Falla de conexión" });
+        res.status(500).json({ exito: false });
     }
 });
 
@@ -97,29 +91,50 @@ app.post('/distribuir', async (req, res) => {
         const respuestaDist = await fetch(urlDistribucion, {
             method: "PUT", headers: headersScanntech, body: JSON.stringify(req.body)
         });
-        if (respuestaDist.ok) {
-            res.json({ exito: true });
-        } else {
-            res.status(400).json({ exito: false, error: await respuestaDist.text() });
-        }
+        if (respuestaDist.ok) res.json({ exito: true });
+        else res.status(400).json({ exito: false });
     } catch (error) {
         res.status(500).json({ exito: false });
     }
 });
 
-// 6. MOVIMIENTOS DE INVENTARIO (STOCK)
+// 6. MOVIMIENTOS DE INVENTARIO (STOCK UNIFICADO)
 app.post('/actualizar-stock', async (req, res) => {
     try {
         const urlStock = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-inventario-angular/api/movimiento";
         const respuestaStock = await fetch(urlStock, {
             method: "POST", headers: headersScanntech, body: JSON.stringify(req.body)
         });
-        if (respuestaStock.ok) {
-            res.json({ exito: true });
+        if (respuestaStock.ok) res.json({ exito: true });
+        else res.status(400).json({ exito: false });
+    } catch (error) {
+        res.status(500).json({ exito: false });
+    }
+});
+
+// 7. NUEVO CAÑÓN: DESCARGAR PDF DE ETIQUETAS OFICIAL
+app.post('/imprimir-etiquetas', async (req, res) => {
+    console.log("¡Pedida generación de PDF original a Scanntech!");
+    try {
+        const urlImprimir = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-imprimir-etiquetas-angular_1.2.3/api/etiquetas/imprimir";
+        const respuestaScanntech = await fetch(urlImprimir, {
+            method: "POST",
+            headers: headersScanntech,
+            body: JSON.stringify(req.body)
+        });
+
+        if (respuestaScanntech.ok) {
+            // Recibimos el archivo binario y le avisamos al celular que es un PDF original
+            res.setHeader("Content-Type", "application/pdf");
+            const buffer = await respuestaScanntech.arrayBuffer();
+            res.send(Buffer.from(buffer));
         } else {
-            res.status(400).json({ exito: false, error: await respuestaStock.text() });
+            const motivo = await respuestaScanntech.text();
+            console.log("Scanntech rechazó la impresión:", respuestaScanntech.status, motivo);
+            res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
+        console.error("Error transmitiendo PDF:", error);
         res.status(500).json({ exito: false });
     }
 });
