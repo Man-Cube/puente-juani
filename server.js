@@ -68,31 +68,47 @@ app.get('/buscar-texto/:texto', async (req, res) => {
     }
 });
 
-// 4. ACTUALIZADOR DE PRECIOS
+// 4. ACTUALIZADOR DE PRECIOS BLINDADO
 app.post('/modificar-precio', async (req, res) => {
+    console.log("🚀 [Precios] Iniciando modificación en bloque...");
     try {
         const respuestaScanntech = await fetch("https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/salvar-lote", {
-            method: "PUT", headers: headersScanntech, body: JSON.stringify(req.body)
+            method: "PUT", 
+            headers: headersScanntech, 
+            body: JSON.stringify(req.body)
         });
+
+        console.log(`📡 [Precios] Scanntech respondió con Status: ${respuestaScanntech.status}`);
         if (respuestaScanntech.ok) {
-            res.json({ exito: true, data: await respuestaScanntech.json() });
+            const dataJSON = await respuestaScanntech.json();
+            console.log("✅ [Precios] Lote guardado con éxito.");
+            res.json({ exito: true, data: dataJSON });
         } else {
-            res.status(400).json({ exito: false });
+            const motivo = await respuestaScanntech.text();
+            console.error("❌ [Precios] Scanntech rechazó el guardado:", motivo);
+            res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
-        res.status(500).json({ exito: false });
+        console.error("💥 [Precios] Error crítico en el servidor puente:", error);
+        res.status(500).json({ exito: false, error: error.message });
     }
 });
 
 // 5. CAÑÓN DE DISTRIBUCIÓN A CAJAS
 app.post('/distribuir', async (req, res) => {
+    console.log("🚀 [Distribución] Enviando tarea a las cajas del local...");
     try {
         const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
         const respuestaDist = await fetch(urlDistribucion, {
             method: "PUT", headers: headersScanntech, body: JSON.stringify(req.body)
         });
-        if (respuestaDist.ok) res.json({ exito: true });
-        else res.status(400).json({ exito: false });
+        if (respuestaDist.ok) {
+            console.log("✅ [Distribución] Éxito. Novedades replicadas.");
+            res.json({ exito: true });
+        } else {
+            console.error("❌ [Distribución] Rebotada por Scanntech.");
+            res.status(400).json({ exito: false });
+        }
     } catch (error) {
         res.status(500).json({ exito: false });
     }
@@ -112,28 +128,29 @@ app.post('/actualizar-stock', async (req, res) => {
     }
 });
 
-// 7. NUEVO CAÑÓN: DESCARGAR PDF DE ETIQUETAS OFICIAL (¡AHORA CON PUT!)
+// 7. DESCARGAR PDF DE ETIQUETAS OFICIAL (CON PUT)
 app.post('/imprimir-etiquetas', async (req, res) => {
-    console.log("¡Pedida generación de PDF original a Scanntech!");
+    console.log("🚀 [PDF] Solicitando archivo original a Scanntech...");
     try {
         const urlImprimir = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-imprimir-etiquetas-angular_1.2.3/api/etiquetas/imprimir";
         const respuestaScanntech = await fetch(urlImprimir, {
-            method: "PUT", // <--- ¡LA MAGIA ESTÁ ACÁ! 
+            method: "PUT", 
             headers: headersScanntech,
             body: JSON.stringify(req.body)
         });
 
         if (respuestaScanntech.ok) {
+            console.log("✅ [PDF] Recibido de Scanntech perfectamente.");
             res.setHeader("Content-Type", "application/pdf");
             const buffer = await respuestaScanntech.arrayBuffer();
             res.send(Buffer.from(buffer));
         } else {
             const motivo = await respuestaScanntech.text();
-            console.log("Scanntech rechazó la impresión:", respuestaScanntech.status, motivo);
+            console.error("❌ [PDF] Scanntech denegó la impresión:", motivo);
             res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
-        console.error("Error transmitiendo PDF:", error);
+        console.error("💥 [PDF] Error transmitiendo archivo:", error);
         res.status(500).json({ exito: false });
     }
 });
