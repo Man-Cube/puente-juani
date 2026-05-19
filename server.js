@@ -12,6 +12,9 @@ const headersScanntech = {
     "gestion": "1222"
 };
 
+// ENCHUFE SECRETO AL EXCEL DE LAS DOÑAS
+const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3pPR-8ACGeaNtlxVVivlpiU9ulSn8TkiO9sSz26RSs--UrEN6aX3MyZ/exec";
+
 // 1. BUSCADOR INTELIGENTE: BARRAS O PLU (CÓDIGO EXTERNO)
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
@@ -68,7 +71,7 @@ app.get('/buscar-texto/:texto', async (req, res) => {
     }
 });
 
-// 4. ACTUALIZADOR DE PRECIOS BLINDADO
+// 4. ACTUALIZADOR DE PRECIOS CON EXCEL AUTOMÁTICO INCLUIDO
 app.post('/modificar-precio', async (req, res) => {
     console.log("🚀 [Precios] Iniciando modificación en bloque...");
     try {
@@ -81,7 +84,32 @@ app.post('/modificar-precio', async (req, res) => {
         console.log(`📡 [Precios] Scanntech respondió con Status: ${respuestaScanntech.status}`);
         if (respuestaScanntech.ok) {
             const dataJSON = await respuestaScanntech.json();
-            console.log("✅ [Precios] Lote guardado con éxito.");
+            console.log("✅ [Precios] Lote guardado con éxito en Scanntech.");
+
+            // DISPARO ASINCRÓNICO DE FONDO AL EXCEL DEL CATÁLOGO
+            try {
+                // Mapeamos los artículos modificados al formato simple del Excel
+                const payloadExcel = req.body.nuevos.map(item => ({
+                    codigo: item.codigoBarras || item.codigoExterno || item.codigo,
+                    desc: item.descripcion,
+                    precio: item.venta && item.venta.valor ? parseFloat(item.venta.valor) : 0
+                }));
+
+                console.log("📡 [Sincro Catálogo] Enviando novedades de precios a Google Sheets...");
+                
+                // Hacemos el fetch sin 'await' para que no tranque la respuesta de la app del cel
+                fetch(URL_GOOGLE_SCRIPT, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payloadExcel)
+                })
+                .then(r => console.log("📊 [Sincro Catálogo] Excel actualizado con éxito de fondo."))
+                .catch(e => console.error("❌ [Sincro Catálogo] Error actualizando planilla:", e));
+
+            } catch (errExcel) {
+                console.error("❌ Error estructurando lote para el catálogo:", errExcel);
+            }
+
             res.json({ exito: true, data: dataJSON });
         } else {
             const motivo = await respuestaScanntech.text();
