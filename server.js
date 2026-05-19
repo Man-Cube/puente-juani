@@ -12,38 +12,69 @@ const headersScanntech = {
     "gestion": "1222"
 };
 
-// 1. BUSCADOR INTELIGENTE POR CÓDIGO EXACTO
+// 1. BUSCADOR INTELIGENTE: BARRAS O PLU (CÓDIGO EXTERNO)
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
     try {
+        // Intento A: Buscar por Código de Barras
         let urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoBarras%253AEQ%253A${codigoLeido}`;
         let resBasica = await fetch(urlBasica, { method: "GET", headers: headersScanntech });
         let dataBasica = await resBasica.json();
-        let articuloBasico = Array.isArray(dataBasica) ? dataBasica[0] : (dataBasica.content ? dataBasica.content[0] : (dataBasica.codigo ? dataBasica : null));
+        let art = dataBasica.content && dataBasica.content.length > 0 ? dataBasica.content[0] : (Array.isArray(dataBasica) && dataBasica.length > 0 ? dataBasica[0] : null);
 
-        if (!articuloBasico) {
+        // Intento B: Si falló, buscar por Código Externo / PLU (Caso Quesos/Fiambres)
+        if (!art || !art.codigo) {
             urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoExterno%253AEQ%253A${codigoLeido}`;
             resBasica = await fetch(urlBasica, { method: "GET", headers: headersScanntech });
             dataBasica = await resBasica.json();
-            articuloBasico = Array.isArray(dataBasica) ? dataBasica[0] : (dataBasica.content ? dataBasica.content[0] : (dataBasica.codigo ? dataBasica : null));
+            art = dataBasica.content && dataBasica.content.length > 0 ? dataBasica.content[0] : (Array.isArray(dataBasica) && dataBasica.length > 0 ? dataBasica[0] : null);
         }
 
-        if (!articuloBasico || !articuloBasico.codigo) {
-            return res.status(404).json({ exito: false, error: "Artículo fantasma" });
+        if (!art || !art.codigo) {
+            return res.status(404).json({ exito: false, error: "Artículo no encontrado" });
         }
 
-        const codigoInterno = articuloBasico.codigo;
+        const codigoInterno = art.codigo;
         const urlPesada = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}?disponibilidadDistribucion=%7B%22fecha%22:null,%22tipoDisponibilidadDistribucion%22:%22IMMEDIATE%22%7D&filter=codigoListaPrecioVenta%253AEQ%253A3163`;
         const resPesada = await fetch(urlPesada, { method: "GET", headers: headersScanntech });
         const articuloCompleto = await resPesada.json();
 
         res.json({ exito: true, articulo: articuloCompleto });
     } catch (error) {
+        console.error("Error buscando código:", error);
         res.status(500).json({ exito: false, error: "Error interno en buscador" });
     }
 });
 
-// 2. ACTUALIZADOR DE PRECIOS
+// 2. BUSCADOR DIRECTO POR ID INTERNO (EVITA ERRORES EN LISTAS DE TEXTO)
+app.get('/buscar-id/:id', async (req, res) => {
+    const codigoInterno = req.params.id;
+    try {
+        const urlPesada = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}?disponibilidadDistribucion=%7B%22fecha%22:null,%22tipoDisponibilidadDistribucion%22:%22IMMEDIATE%22%7D&filter=codigoListaPrecioVenta%253AEQ%253A3163`;
+        const resPesada = await fetch(urlPesada, { method: "GET", headers: headersScanntech });
+        const articuloCompleto = await resPesada.json();
+        res.json({ exito: true, articulo: articuloCompleto });
+    } catch (error) {
+        console.error("Error trayendo ID:", error);
+        res.status(500).json({ exito: false, error: "Error interno al traer ficha" });
+    }
+});
+
+// 3. BUSCADOR POR TEXTO / DESCRIPCIÓN
+app.get('/buscar-texto/:texto', async (req, res) => {
+    const textoBusqueda = encodeURIComponent(req.params.texto.toUpperCase());
+    try {
+        const urlTexto = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos-buscador?filter=descripcion%253ALIKE%253A${textoBusqueda}%252CincluirCombos%253AEQ%253Atrue&orderBy=desc(descripcion)&estado=ACTIVAS&initialRow=0&rowCount=50`;
+        const respuesta = await fetch(urlTexto, { method: "GET", headers: headersScanntech });
+        const data = await respuesta.json();
+        const resultados = data.content ? data.content : (Array.isArray(data) ? data : []);
+        res.json({ exito: true, resultados: resultados });
+    } catch (error) {
+        res.status(500).json({ exito: false, error: "Falla de conexión" });
+    }
+});
+
+// 4. ACTUALIZADOR DE PRECIOS
 app.post('/modificar-precio', async (req, res) => {
     try {
         const respuestaScanntech = await fetch("https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/salvar-lote", {
@@ -59,7 +90,7 @@ app.post('/modificar-precio', async (req, res) => {
     }
 });
 
-// 3. CAÑÓN DE DISTRIBUCIÓN A CAJAS
+// 5. CAÑÓN DE DISTRIBUCIÓN A CAJAS
 app.post('/distribuir', async (req, res) => {
     try {
         const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
@@ -76,7 +107,7 @@ app.post('/distribuir', async (req, res) => {
     }
 });
 
-// 4. MOVIMIENTOS DE INVENTARIO (STOCK)
+// 6. MOVIMIENTOS DE INVENTARIO (STOCK)
 app.post('/actualizar-stock', async (req, res) => {
     try {
         const urlStock = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-inventario-angular/api/movimiento";
@@ -90,22 +121,6 @@ app.post('/actualizar-stock', async (req, res) => {
         }
     } catch (error) {
         res.status(500).json({ exito: false });
-    }
-});
-
-// 5. NUEVO: BUSCADOR DE PALABRAS Y TEXTOS (MODO GOOGLE)
-app.get('/buscar-texto/:texto', async (req, res) => {
-    const textoBusqueda = encodeURIComponent(req.params.texto.toUpperCase());
-    try {
-        const urlTexto = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos-buscador?filter=descripcion%253ALIKE%253A${textoBusqueda}%252CincluirCombos%253AEQ%253Atrue&orderBy=desc(descripcion)&estado=ACTIVAS&initialRow=0&rowCount=50`;
-        const respuesta = await fetch(urlTexto, { method: "GET", headers: headersScanntech });
-        const data = await respuesta.json();
-        
-        const resultados = data.content ? data.content : (Array.isArray(data) ? data : []);
-        res.json({ exito: true, resultados: resultados });
-    } catch (error) {
-        console.error("Error buscando por texto:", error);
-        res.status(500).json({ exito: false, error: "Falla de conexión" });
     }
 });
 
