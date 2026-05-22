@@ -1,102 +1,191 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
-const Papa = require('papaparse');
 
 const app = express();
-app.use(cors()); // Para que los celulares puedan conectarse sin error
-app.use(express.json());
+app.use(cors()); 
+app.use(express.json()); 
 
-// ==========================================
-// TUS CONFIGURACIONES (Llená estos datos)
-// ==========================================
-const URL_TU_EXCEL_CSV = "ACA_PONE_EL_LINK_CSV_DE_TU_GOOGLE_SHEETS";
-const TOKEN_SCANNTECH = "ACA_PONE_TU_TOKEN_DE_SCANNTECH"; // Ej: 'Basic ...' o 'Bearer ...'
-const URL_API_SCANNTECH = "ACA_PONE_LA_URL_BASE_DE_SCANNTECH"; // Ej: 'https://api.scanntech.com'
+const headersScanntech = {
+"Authorization": "Basic QUQxMTE0OCRpcG9zc2IzYXI6R1VTVEkxMA==",
+"Content-Type": "application/json",
+"emp_codigo": "11148",
+"gestion": "1222"
+};
 
-let catalogoFresquito = []; 
+// ENCHUFE SECRETO AL EXCEL DE LAS DOÑAS
+const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3pPR-8ACGeaNtlxVVivlpiU9ulSn8TkiO9sSz26RSs--UrEN6aX3MyZ/exec";
 
-// ==========================================
-// EL MOTOR DE SINCRONIZACIÓN
-// ==========================================
-async function armarCatalogoMaestro() {
-    try {
-        console.log("Iniciando sincronización con Scanntech...");
-        
-        // 1. Bajamos el esqueleto (fotos y nombres) del Excel
-        const respuestaExcel = await axios.get(URL_TU_EXCEL_CSV);
-        const datosExcel = Papa.parse(respuestaExcel.data, { header: true, skipEmptyLines: true }).data;
+// 1. BUSCADOR INTELIGENTE: BARRAS O PLU (CÓDIGO EXTERNO)
+app.get('/buscar/:codigo', async (req, res) => {
+const codigoLeido = req.params.codigo;
+try {
+let urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoBarras%253AEQ%253A${codigoLeido}`;
+let resBasica = await fetch(urlBasica, { method: "GET", headers: headersScanntech });
+let dataBasica = await resBasica.json();
+let art = dataBasica.content && dataBasica.content.length > 0 ? dataBasica.content[0] : (Array.isArray(dataBasica) && dataBasica.length > 0 ? dataBasica[0] : null);
 
-        let catalogoTemporal = [];
-
-        // 2. Por cada producto, buscamos su precio y stock real
-        for (let producto of datosExcel) {
-            if (!producto.codigo) continue; 
-
-            try {
-                const resScanntech = await axios.get(`${URL_API_SCANNTECH}/articulos/${producto.codigo}`, {
-                    headers: { 'Authorization': TOKEN_SCANNTECH }
-                });
-
-                const dataScan = resScanntech.data;
-
-                // 3. Unimos todo
-                catalogoTemporal.push({
-                    codigo: producto.codigo,
-                    nombre: producto.nombre,
-                    categoria: producto.categoria || "Otros",
-                    subcategoria: producto.subcategoria || "General",
-                    imagen: producto.imagen,
-                    precio: parseFloat(dataScan.venta.valor) || 0, 
-                    stockDisponible: parseInt(dataScan.totalStock.valor) || 0 
-                });
-
-            } catch (errorItem) {
-                console.log(`Error buscando en Scanntech el código ${producto.codigo}`);
-            }
-        }
-
-        // 4. Guardamos la info lista para usar
-        catalogoFresquito = catalogoTemporal;
-        console.log("¡Catálogo maestro actualizado con éxito!");
-
-    } catch (errorGeneral) {
-        console.error("Error fatal armando el catálogo", errorGeneral);
-    }
+if (!art || !art.codigo) {
+urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoExterno%253AEQ%253A${codigoLeido}`;
+resBasica = await fetch(urlBasica, { method: "GET", headers: headersScanntech });
+dataBasica = await resBasica.json();
+art = dataBasica.content && dataBasica.content.length > 0 ? dataBasica.content[0] : (Array.isArray(dataBasica) && dataBasica.length > 0 ? dataBasica[0] : null);
 }
 
-// Arranca automático al prender el servidor
-armarCatalogoMaestro();
-// Y se repite cada 30 minutos (1800000 ms)
-setInterval(armarCatalogoMaestro, 1800000);
+if (!art || !art.codigo) {
+return res.status(404).json({ exito: false, error: "Artículo no encontrado" });
+}
 
-// ==========================================
-// LAS RUTAS DE TU SERVIDOR
-// ==========================================
+const codigoInterno = art.codigo;
+const urlPesada = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}?disponibilidadDistribucion=%7B%22fecha%22:null,%22tipoDisponibilidadDistribucion%22:%22IMMEDIATE%22%7D&filter=codigoListaPrecioVenta%253AEQ%253A3163`;
+const resPesada = await fetch(urlPesada, { method: "GET", headers: headersScanntech });
+const articuloCompleto = await resPesada.json();
 
-// Ruta A: La que lee la App de las doñas
-app.get('/api/catalogo-juani', (req, res) => {
-    res.json(catalogoFresquito);
+res.json({ exito: true, articulo: articuloCompleto });
+} catch (error) {
+res.status(500).json({ exito: false, error: "Error interno en buscador" });
+}
 });
 
-// Ruta B: El botón de pánico de AppSheet
-app.post('/api/sincronizar-manual', async (req, res) => {
-    const clave = req.headers['authorization'];
-    
-    if (clave !== 'CHACHO_ADMIN_123') {
-        return res.status(403).send("No tenés permiso.");
-    }
-
-    try {
-        await armarCatalogoMaestro();
-        res.send("Sincronización manual forzada con éxito.");
-    } catch (error) {
-        res.status(500).send("Error forzando la sincro.");
-    }
+// 2. BUSCADOR DIRECTO POR ID INTERNO
+app.get('/buscar-id/:id', async (req, res) => {
+const codigoInterno = req.params.id;
+try {
+const urlPesada = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}?disponibilidadDistribucion=%7B%22fecha%22:null,%22tipoDisponibilidadDistribucion%22:%22IMMEDIATE%22%7D&filter=codigoListaPrecioVenta%253AEQ%253A3163`;
+const resPesada = await fetch(urlPesada, { method: "GET", headers: headersScanntech });
+res.json({ exito: true, articulo: await resPesada.json() });
+} catch (error) {
+res.status(500).json({ exito: false });
+}
 });
 
-// Prendemos el servidor
+// 3. BUSCADOR POR TEXTO / DESCRIPCIÓN
+app.get('/buscar-texto/:texto', async (req, res) => {
+const textoBusqueda = encodeURIComponent(req.params.texto.toUpperCase());
+try {
+const urlTexto = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos-buscador?filter=descripcion%253ALIKE%253A${textoBusqueda}%252CincluirCombos%253AEQ%253Atrue&orderBy=desc(descripcion)&estado=ACTIVAS&initialRow=0&rowCount=50`;
+const respuesta = await fetch(urlTexto, { method: "GET", headers: headersScanntech });
+const data = await respuesta.json();
+res.json({ exito: true, resultados: data.content || data || [] });
+} catch (error) {
+res.status(500).json({ exito: false });
+}
+});
+
+// 4. ACTUALIZADOR DE PRECIOS BLINDADO
+// 4. ACTUALIZADOR DE PRECIOS CON EXCEL AUTOMÁTICO INCLUIDO
+app.post('/modificar-precio', async (req, res) => {
+console.log("🚀 [Precios] Iniciando modificación en bloque...");
+try {
+const respuestaScanntech = await fetch("https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/salvar-lote", {
+method: "PUT", 
+headers: headersScanntech, 
+body: JSON.stringify(req.body)
+});
+
+console.log(`📡 [Precios] Scanntech respondió con Status: ${respuestaScanntech.status}`);
+if (respuestaScanntech.ok) {
+const dataJSON = await respuestaScanntech.json();
+            console.log("✅ [Precios] Lote guardado con éxito.");
+            console.log("✅ [Precios] Lote guardado con éxito en Scanntech.");
+
+            // DISPARO ASINCRÓNICO DE FONDO AL EXCEL DEL CATÁLOGO
+            try {
+                // Mapeamos los artículos modificados al formato simple del Excel
+                const payloadExcel = req.body.nuevos.map(item => ({
+                    codigo: item.codigoBarras || item.codigoExterno || item.codigo,
+                    desc: item.descripcion,
+                    precio: item.venta && item.venta.valor ? parseFloat(item.venta.valor) : 0
+                }));
+
+                console.log("📡 [Sincro Catálogo] Enviando novedades de precios a Google Sheets...");
+                
+                // Hacemos el fetch sin 'await' para que no tranque la respuesta de la app del cel
+                fetch(URL_GOOGLE_SCRIPT, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payloadExcel)
+                })
+                .then(r => console.log("📊 [Sincro Catálogo] Excel actualizado con éxito de fondo."))
+                .catch(e => console.error("❌ [Sincro Catálogo] Error actualizando planilla:", e));
+
+            } catch (errExcel) {
+                console.error("❌ Error estructurando lote para el catálogo:", errExcel);
+            }
+
+res.json({ exito: true, data: dataJSON });
+} else {
+const motivo = await respuestaScanntech.text();
+console.error("❌ [Precios] Scanntech rechazó el guardado:", motivo);
+res.status(400).json({ exito: false, error: motivo });
+}
+} catch (error) {
+console.error("💥 [Precios] Error crítico en el servidor puente:", error);
+res.status(500).json({ exito: false, error: error.message });
+}
+});
+
+// 5. CAÑÓN DE DISTRIBUCIÓN A CAJAS
+app.post('/distribuir', async (req, res) => {
+console.log("🚀 [Distribución] Enviando tarea a las cajas del local...");
+try {
+const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
+const respuestaDist = await fetch(urlDistribucion, {
+method: "PUT", headers: headersScanntech, body: JSON.stringify(req.body)
+});
+if (respuestaDist.ok) {
+console.log("✅ [Distribución] Éxito. Novedades replicadas.");
+res.json({ exito: true });
+} else {
+console.error("❌ [Distribución] Rebotada por Scanntech.");
+res.status(400).json({ exito: false });
+}
+} catch (error) {
+res.status(500).json({ exito: false });
+}
+});
+
+// 6. MOVIMIENTOS DE INVENTARIO (STOCK UNIFICADO)
+app.post('/actualizar-stock', async (req, res) => {
+try {
+const urlStock = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-inventario-angular/api/movimiento";
+const respuestaStock = await fetch(urlStock, {
+method: "POST", headers: headersScanntech, body: JSON.stringify(req.body)
+});
+if (respuestaStock.ok) res.json({ exito: true });
+else res.status(400).json({ exito: false });
+} catch (error) {
+res.status(500).json({ exito: false });
+}
+});
+
+// 7. DESCARGAR PDF DE ETIQUETAS OFICIAL (CON PUT)
+app.post('/imprimir-etiquetas', async (req, res) => {
+console.log("🚀 [PDF] Solicitando archivo original a Scanntech...");
+try {
+const urlImprimir = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-imprimir-etiquetas-angular_1.2.3/api/etiquetas/imprimir";
+const respuestaScanntech = await fetch(urlImprimir, {
+method: "PUT", 
+headers: headersScanntech,
+body: JSON.stringify(req.body)
+});
+
+if (respuestaScanntech.ok) {
+console.log("✅ [PDF] Recibido de Scanntech perfectamente.");
+res.setHeader("Content-Type", "application/pdf");
+const buffer = await respuestaScanntech.arrayBuffer();
+res.send(Buffer.from(buffer));
+} else {
+const motivo = await respuestaScanntech.text();
+console.error("❌ [PDF] Scanntech denegó la impresión:", motivo);
+res.status(400).json({ exito: false, error: motivo });
+}
+} catch (error) {
+console.error("💥 [PDF] Error transmitiendo archivo:", error);
+res.status(500).json({ exito: false });
+}
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Servidor de Juani corriendo en el puerto ${PORT}`);
+console.log(`Servidor ACTIVO en el puerto ${PORT}`);
 });
