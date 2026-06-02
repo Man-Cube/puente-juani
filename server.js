@@ -14,54 +14,86 @@ const headersScanntech = {
     "gestion": "1222"
 };
 
-// ENCHUFE SECRETO AL EXCEL DE LAS DOÑAS
 const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3pPR-8ACGeaNtlxVVivlpiU9ulSn8TkiO9sSz26RSs--UrEN6aX3MyZ/exec";
 
 // =======================================================
-// 0. MOTOR RASTREADOR DE PRECIOS COMPETENCIA
+// 0. MOTOR RASTREADOR DE PRECIOS COMPETENCIA (2 PASOS)
 // =======================================================
 app.get('/rastrear-precios/:codigo', async (req, res) => {
     const codigo = req.params.codigo.trim();
     
-    // Valores por defecto por si no los encuentran o no los trabajan
     let precioCoco = "-";
     let precioMaxi = "-";
 
+    // Nos disfrazamos de Google Chrome para que no nos bloqueen la entrada
+    const configAxios = {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+    };
+
+    // ---------------------------------------------------
+    // 1. ARAÑA PARA SUPER COCO
+    // ---------------------------------------------------
     try {
-        // 1. ARAÑA PARA SUPER COCO
-        const urlCoco = `https://supercoco.com.ar/search/?q=${codigo}`;
-        const responseCoco = await axios.get(urlCoco, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-        });
+        const searchUrlCoco = `https://supercoco.com.ar/search/?q=${codigo}`;
+        const searchResCoco = await axios.get(searchUrlCoco, configAxios);
+        const $searchCoco = cheerio.load(searchResCoco.data);
         
-        const $coco = cheerio.load(responseCoco.data);
-        let textoPrecioCoco = $coco('.price, .precio, .woocommerce-Price-amount, .js-price-display').first().text();
+        // PASO 1: Robamos el link del producto desde la grilla
+        let productLinkCoco = $searchCoco('.product-miniature a, .thumbnail-container a, .product-title a, .product-item a').first().attr('href');
         
-        if (textoPrecioCoco && textoPrecioCoco.includes('$')) {
-            precioCoco = textoPrecioCoco.replace(/[^\d.,]/g, '').trim();
+        if (productLinkCoco) {
+            if (productLinkCoco.startsWith('/')) productLinkCoco = 'https://supercoco.com.ar' + productLinkCoco;
+
+            // PASO 2: Viajamos a la página específica del producto
+            const prodResCoco = await axios.get(productLinkCoco, configAxios);
+            const $prodCoco = cheerio.load(prodResCoco.data);
+            
+            // Extraemos el precio puro y duro
+            let contentPrice = $prodCoco('[itemprop="price"]').attr('content');
+            if (contentPrice) {
+                precioCoco = parseFloat(contentPrice).toFixed(2);
+            } else {
+                let textoPrecioCoco = $prodCoco('.current-price, .price, .precio').first().text();
+                if (textoPrecioCoco) precioCoco = textoPrecioCoco.replace(/[^\d.,]/g, '').trim();
+            }
         }
     } catch (error) {
         console.log(`[RASTREADOR] Super Coco falló para el código: ${codigo}`);
     }
 
+    // ---------------------------------------------------
+    // 2. ARAÑA PARA MAXIDESCUENTO
+    // ---------------------------------------------------
     try {
-        // 2. ARAÑA PARA MAXIDESCUENTO
-        const urlMaxi = `https://www.maxidescuento.com.ar/search/?q=${codigo}`;
-        const responseMaxi = await axios.get(urlMaxi, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-        });
+        const searchUrlMaxi = `https://www.maxidescuento.com.ar/search/?q=${codigo}`;
+        const searchResMaxi = await axios.get(searchUrlMaxi, configAxios);
+        const $searchMaxi = cheerio.load(searchResMaxi.data);
         
-        const $maxi = cheerio.load(responseMaxi.data);
-        let textoPrecioMaxi = $maxi('.price, .precio, .woocommerce-Price-amount, .js-price-display').first().text();
+        // PASO 1: Robamos el link desde la grilla
+        let productLinkMaxi = $searchMaxi('.product-miniature a, .thumbnail-container a, .product-title a, .product-description a').first().attr('href');
         
-        if (textoPrecioMaxi && textoPrecioMaxi.includes('$')) {
-            precioMaxi = textoPrecioMaxi.replace(/[^\d.,]/g, '').trim();
+        if (productLinkMaxi) {
+            if (productLinkMaxi.startsWith('/')) productLinkMaxi = 'https://www.maxidescuento.com.ar' + productLinkMaxi;
+
+            // PASO 2: Entramos a la página individual de la mayonesa (o el producto que sea)
+            const prodResMaxi = await axios.get(productLinkMaxi, configAxios);
+            const $prodMaxi = cheerio.load(prodResMaxi.data);
+            
+            // Maxidescuento usa un atributo "content" oculto con el precio exacto, lo usamos a nuestro favor
+            let contentPrice = $prodMaxi('[itemprop="price"]').attr('content');
+            if (contentPrice) {
+                precioMaxi = parseFloat(contentPrice).toFixed(2);
+            } else {
+                // Si no lo tiene, limpiamos el texto visible
+                let textoPrecioMaxi = $prodMaxi('.current-price, span[itemprop="price"], .price').first().text();
+                if (textoPrecioMaxi) precioMaxi = textoPrecioMaxi.replace(/[^\d.,]/g, '').trim();
+            }
         }
     } catch (error) {
         console.log(`[RASTREADOR] Maxidescuento falló para el código: ${codigo}`);
     }
 
-    // Le devolvemos el informe al Excel
+    // Devolvemos el informe limpio al Excel
     res.json({
         exito: true,
         codigo: codigo,
@@ -134,7 +166,7 @@ app.get('/buscar-texto/:texto', async (req, res) => {
 });
 
 // =======================================================
-// 4. ACTUALIZADOR DE PRECIOS CON EXCEL AUTOMÁTICO INCLUIDO
+// 4. ACTUALIZADOR DE PRECIOS CON EXCEL AUTOMÁTICO
 // =======================================================
 app.post('/modificar-precio', async (req, res) => {
     console.log("🚀 [Precios] Iniciando modificación en bloque...");
@@ -145,43 +177,30 @@ app.post('/modificar-precio', async (req, res) => {
             body: JSON.stringify(req.body)
         });
 
-        console.log(`📡 [Precios] Scanntech respondió con Status: ${respuestaScanntech.status}`);
         if (respuestaScanntech.ok) {
             const dataJSON = await respuestaScanntech.json();
-            console.log("✅ [Precios] Lote guardado con éxito en Scanntech.");
-
-            // DISPARO ASINCRÓNICO DE FONDO AL EXCEL DEL CATÁLOGO
+            
+            // Disparo de fondo al Excel
             try {
-                // Mapeamos los artículos modificados al formato simple del Excel
                 const payloadExcel = req.body.nuevos.map(item => ({
                     codigo: item.codigoBarras || item.codigoExterno || item.codigo,
                     desc: item.descripcion,
                     precio: item.venta && item.venta.valor ? parseFloat(item.venta.valor) : 0
                 }));
 
-                console.log("📡 [Sincro Catálogo] Enviando novedades de precios a Google Sheets...");
-                
-                // Hacemos el fetch sin 'await' para que no tranque la respuesta de la app del cel
                 fetch(URL_GOOGLE_SCRIPT, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payloadExcel)
-                })
-                .then(r => console.log("📊 [Sincro Catálogo] Excel actualizado con éxito de fondo."))
-                .catch(e => console.error("❌ [Sincro Catálogo] Error actualizando planilla:", e));
-
-            } catch (errExcel) {
-                console.error("❌ Error estructurando lote para el catálogo:", errExcel);
-            }
+                }).catch(e => console.error("❌ [Sincro] Error:", e));
+            } catch (errExcel) {}
 
             res.json({ exito: true, data: dataJSON });
         } else {
             const motivo = await respuestaScanntech.text();
-            console.error("❌ [Precios] Scanntech rechazó el guardado:", motivo);
             res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
-        console.error("💥 [Precios] Error crítico en el servidor puente:", error);
         res.status(500).json({ exito: false, error: error.message });
     }
 });
@@ -190,17 +209,14 @@ app.post('/modificar-precio', async (req, res) => {
 // 5. CAÑÓN DE DISTRIBUCIÓN A CAJAS
 // =======================================================
 app.post('/distribuir', async (req, res) => {
-    console.log("🚀 [Distribución] Enviando tarea a las cajas del local...");
     try {
         const urlDistribucion = "https://modulos-be-minoristas.scanntech.com/be-modulos-distribuciones-tareas-angular_1.1.13/api/distribuciones-tareas-locales-unificadas/completar-sin-imprimir?completarParaTodosLosLocales=true";
         const respuestaDist = await fetch(urlDistribucion, {
             method: "PUT", headers: headersScanntech, body: JSON.stringify(req.body)
         });
         if (respuestaDist.ok) {
-            console.log("✅ [Distribución] Éxito. Novedades replicadas.");
             res.json({ exito: true });
         } else {
-            console.error("❌ [Distribución] Rebotada por Scanntech.");
             res.status(400).json({ exito: false });
         }
     } catch (error) {
@@ -225,10 +241,9 @@ app.post('/actualizar-stock', async (req, res) => {
 });
 
 // =======================================================
-// 7. DESCARGAR PDF DE ETIQUETAS OFICIAL (CON PUT)
+// 7. DESCARGAR PDF DE ETIQUETAS OFICIAL
 // =======================================================
 app.post('/imprimir-etiquetas', async (req, res) => {
-    console.log("🚀 [PDF] Solicitando archivo original a Scanntech...");
     try {
         const urlImprimir = "https://modulos-be-2-minoristas.scanntech.com/be-modulos-imprimir-etiquetas-angular_1.2.3/api/etiquetas/imprimir";
         const respuestaScanntech = await fetch(urlImprimir, {
@@ -238,17 +253,14 @@ app.post('/imprimir-etiquetas', async (req, res) => {
         });
 
         if (respuestaScanntech.ok) {
-            console.log("✅ [PDF] Recibido de Scanntech perfectamente.");
             res.setHeader("Content-Type", "application/pdf");
             const buffer = await respuestaScanntech.arrayBuffer();
             res.send(Buffer.from(buffer));
         } else {
             const motivo = await respuestaScanntech.text();
-            console.error("❌ [PDF] Scanntech denegó la impresión:", motivo);
             res.status(400).json({ exito: false, error: motivo });
         }
     } catch (error) {
-        console.error("💥 [PDF] Error transmitiendo archivo:", error);
         res.status(500).json({ exito: false });
     }
 });
