@@ -22,34 +22,27 @@ const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3
 // =======================================================
 // 0. MOTOR RASTREADOR V4 (ANTI-PATOVICA Y MULTI-BÚSQUEDA)
 // =======================================================
+// =======================================================
+// 0. MOTOR RASTREADOR V5 (URLS EXACTAS)
+// =======================================================
 app.get('/rastrear-precios/:codigo', async (req, res) => {
     const codigo = req.params.codigo.trim();
     let precioCoco = "-";
     let precioMaxi = "-";
 
-    // El traje de camuflaje de altísima tecnología para pasar el 403
     const headersCamuflaje = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'es-AR,es;q=0.8,en-US;q=0.5,en;q=0.3',
-        'Sec-Ch-Ua': '"Chromium";v="122", "Google Chrome";v="122", "Not-A.Brand";v="99"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
         'Upgrade-Insecure-Requests': '1'
     };
 
-    // Función que extrae y limpia el precio sin importar dónde lo escondan
     const buscarPrecioEnHTML = ($) => {
         let p = $('meta[itemprop="price"]').attr('content') || $('[itemprop="price"]').attr('content');
         if (!p) {
             let texto = $('.current-price, .price, .precio, span[itemprop="price"], .woocommerce-Price-amount').first().text();
             if (texto) {
                 let limpio = texto.replace(/[^\d.,]/g, '').trim();
-                // Arreglamos el formato argentino (ej: 1.200,50 -> 1200.50)
                 if (limpio.includes(',') && limpio.includes('.')) limpio = limpio.replace(/\./g, '').replace(',', '.');
                 else if (limpio.includes(',')) limpio = limpio.replace(',', '.');
                 p = limpio;
@@ -58,11 +51,9 @@ app.get('/rastrear-precios/:codigo', async (req, res) => {
         return p && !isNaN(parseFloat(p)) ? parseFloat(p).toFixed(2) : null;
     };
 
-    // --- 1. SUPER COCO (Buscando la URL correcta para evitar el 404) ---
+    // --- 1. SUPER COCO ---
     try {
         console.log(`\n🕵️ [RASTREADOR] Intentando Super Coco...`);
-        
-        // Probamos las 3 terminaciones de buscadores más comunes
         const urlsCoco = [
             `https://supercoco.com.ar/?s=${codigo}`,
             `https://supercoco.com.ar/buscar?q=${codigo}`,
@@ -73,7 +64,6 @@ app.get('/rastrear-precios/:codigo', async (req, res) => {
         let urlFuncionando = false;
 
         for (let url of urlsCoco) {
-            console.log(`   ➡️ Probando URL: ${url}`);
             const reqCoco = await fetch(url, { headers: headersCamuflaje });
             if (reqCoco.ok) {
                 const htmlCoco = await reqCoco.text();
@@ -89,24 +79,20 @@ app.get('/rastrear-precios/:codigo', async (req, res) => {
                 let link = $coco('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
                 if (link) {
                     if (link.startsWith('/')) link = 'https://supercoco.com.ar' + link;
-                    console.log(`   ➡️ Entrando al producto: ${link}`);
                     const reqProd = await fetch(link, { headers: headersCamuflaje });
                     const htmlProd = await reqProd.text();
                     precioCoco = buscarPrecioEnHTML(cheerio.load(htmlProd)) || "-";
                 }
             }
         }
-        console.log(`   ✅ Precio Coco final: ${precioCoco}`);
-    } catch (error) {
-        console.error(`   ❌ Error Coco: ${error.message}`);
-    }
+    } catch (error) {}
 
-    // --- 2. MAXIDESCUENTO (Blando el 403 con Fetch nativo) ---
+    // --- 2. MAXIDESCUENTO (CON LA URL SECRETA DESCUBIERTA) ---
     try {
         console.log(`\n🕵️ [RASTREADOR] Intentando Maxidescuento...`);
-        const searchUrlMaxi = `https://www.maxidescuento.com.ar/buscar?q=${codigo}`;
+        // Usamos la URL exacta que me pasaste, inyectando el código
+        const searchUrlMaxi = `https://www.maxidescuento.com.ar/busqueda?controller=search&s=${codigo}`;
         
-        // Usamos el fetch camuflado para engañar a Cloudflare
         const reqMaxi = await fetch(searchUrlMaxi, { headers: headersCamuflaje });
         
         if (!reqMaxi.ok) {
@@ -116,8 +102,9 @@ app.get('/rastrear-precios/:codigo', async (req, res) => {
             let $maxi = cheerio.load(htmlMaxi);
             precioMaxi = buscarPrecioEnHTML($maxi) || "-";
 
+            // Si está en la grilla, buscamos el enlace de la foto (PrestaShop)
             if (precioMaxi === "-") {
-                let link = $maxi('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
+                let link = $maxi('.thumbnail.product-thumbnail, .product-miniature a, .product-title a').first().attr('href');
                 if (link) {
                     if (link.startsWith('/')) link = 'https://www.maxidescuento.com.ar' + link;
                     console.log(`   ➡️ Entrando al producto: ${link}`);
