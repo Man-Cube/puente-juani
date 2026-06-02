@@ -17,89 +17,84 @@ const headersScanntech = {
 const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3pPR-8ACGeaNtlxVVivlpiU9ulSn8TkiO9sSz26RSs--UrEN6aX3MyZ/exec";
 
 // =======================================================
-// 0. MOTOR RASTREADOR DE PRECIOS COMPETENCIA (2 PASOS)
+// 0. MOTOR RASTREADOR DE PRECIOS COMPETENCIA V3 (INTELIGENTE)
 // =======================================================
 app.get('/rastrear-precios/:codigo', async (req, res) => {
     const codigo = req.params.codigo.trim();
-    
     let precioCoco = "-";
     let precioMaxi = "-";
 
-    // Nos disfrazamos de Google Chrome para que no nos bloqueen la entrada
+    // Nos disfrazamos de un Google Chrome de escritorio real
     const configAxios = {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'es-AR,es;q=0.8,en-US;q=0.5,en;q=0.3',
+        },
+        timeout: 10000 // Si tarda más de 10 seg, aborta para no colgar el Excel
     };
 
-    // ---------------------------------------------------
-    // 1. ARAÑA PARA SUPER COCO
-    // ---------------------------------------------------
-    try {
-        const searchUrlCoco = `https://supercoco.com.ar/search/?q=${codigo}`;
-        const searchResCoco = await axios.get(searchUrlCoco, configAxios);
-        const $searchCoco = cheerio.load(searchResCoco.data);
-        
-        // PASO 1: Robamos el link del producto desde la grilla
-        let productLinkCoco = $searchCoco('.product-miniature a, .thumbnail-container a, .product-title a, .product-item a').first().attr('href');
-        
-        if (productLinkCoco) {
-            if (productLinkCoco.startsWith('/')) productLinkCoco = 'https://supercoco.com.ar' + productLinkCoco;
-
-            // PASO 2: Viajamos a la página específica del producto
-            const prodResCoco = await axios.get(productLinkCoco, configAxios);
-            const $prodCoco = cheerio.load(prodResCoco.data);
-            
-            // Extraemos el precio puro y duro
-            let contentPrice = $prodCoco('[itemprop="price"]').attr('content');
-            if (contentPrice) {
-                precioCoco = parseFloat(contentPrice).toFixed(2);
-            } else {
-                let textoPrecioCoco = $prodCoco('.current-price, .price, .precio').first().text();
-                if (textoPrecioCoco) precioCoco = textoPrecioCoco.replace(/[^\d.,]/g, '').trim();
+    // Función que extrae y limpia el precio sin importar dónde esté
+    const buscarPrecioEnHTML = ($) => {
+        let p = $('meta[itemprop="price"]').attr('content') || $('[itemprop="price"]').attr('content');
+        if (!p) {
+            let texto = $('.current-price, .price, .precio, span[itemprop="price"], .woocommerce-Price-amount').first().text();
+            if (texto) {
+                let limpio = texto.replace(/[^\d.,]/g, '').trim();
+                // Arreglamos el formato argentino (ej: 1.200,50 -> 1200.50)
+                if (limpio.includes(',') && limpio.includes('.')) limpio = limpio.replace(/\./g, '').replace(',', '.');
+                else if (limpio.includes(',')) limpio = limpio.replace(',', '.');
+                p = limpio;
             }
         }
-    } catch (error) {
-        console.log(`[RASTREADOR] Super Coco falló para el código: ${codigo}`);
-    }
+        return p && !isNaN(parseFloat(p)) ? parseFloat(p).toFixed(2) : null;
+    };
 
-    // ---------------------------------------------------
-    // 2. ARAÑA PARA MAXIDESCUENTO
-    // ---------------------------------------------------
     try {
-        const searchUrlMaxi = `https://www.maxidescuento.com.ar/search/?q=${codigo}`;
-        const searchResMaxi = await axios.get(searchUrlMaxi, configAxios);
-        const $searchMaxi = cheerio.load(searchResMaxi.data);
+        console.log(`\n🕵️ [RASTREADOR] Buscando ${codigo} en Super Coco...`);
+        const resCoco = await axios.get(`https://supercoco.com.ar/search/?q=${codigo}`, configAxios);
+        let $coco = cheerio.load(resCoco.data);
         
-        // PASO 1: Robamos el link desde la grilla
-        let productLinkMaxi = $searchMaxi('.product-miniature a, .thumbnail-container a, .product-title a, .product-description a').first().attr('href');
-        
-        if (productLinkMaxi) {
-            if (productLinkMaxi.startsWith('/')) productLinkMaxi = 'https://www.maxidescuento.com.ar' + productLinkMaxi;
+        // Intento 1: ¿El precio ya está a la vista? (Redirección o grilla)
+        precioCoco = buscarPrecioEnHTML($coco) || "-";
 
-            // PASO 2: Entramos a la página individual de la mayonesa (o el producto que sea)
-            const prodResMaxi = await axios.get(productLinkMaxi, configAxios);
-            const $prodMaxi = cheerio.load(prodResMaxi.data);
-            
-            // Maxidescuento usa un atributo "content" oculto con el precio exacto, lo usamos a nuestro favor
-            let contentPrice = $prodMaxi('[itemprop="price"]').attr('content');
-            if (contentPrice) {
-                precioMaxi = parseFloat(contentPrice).toFixed(2);
-            } else {
-                // Si no lo tiene, limpiamos el texto visible
-                let textoPrecioMaxi = $prodMaxi('.current-price, span[itemprop="price"], .price').first().text();
-                if (textoPrecioMaxi) precioMaxi = textoPrecioMaxi.replace(/[^\d.,]/g, '').trim();
+        // Intento 2: Si no hay precio a la vista, buscamos el link de la foto y entramos
+        if (precioCoco === "-") {
+            let link = $coco('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
+            if (link) {
+                if (link.startsWith('/')) link = 'https://supercoco.com.ar' + link;
+                console.log(`   ➡️ Entrando al link interno: ${link}`);
+                const resCoco2 = await axios.get(link, configAxios);
+                precioCoco = buscarPrecioEnHTML(cheerio.load(resCoco2.data)) || "-";
             }
         }
+        console.log(`   ✅ Precio Coco final: ${precioCoco}`);
     } catch (error) {
-        console.log(`[RASTREADOR] Maxidescuento falló para el código: ${codigo}`);
+        console.error(`   ❌ Error Coco: ${error.response ? error.response.status : error.message}`);
     }
 
-    // Devolvemos el informe limpio al Excel
-    res.json({
-        exito: true,
-        codigo: codigo,
-        coco: precioCoco,
-        maxi: precioMaxi
-    });
+    try {
+        console.log(`\n🕵️ [RASTREADOR] Buscando ${codigo} en Maxidescuento...`);
+        const resMaxi = await axios.get(`https://www.maxidescuento.com.ar/search/?q=${codigo}`, configAxios);
+        let $maxi = cheerio.load(resMaxi.data);
+        
+        precioMaxi = buscarPrecioEnHTML($maxi) || "-";
+
+        if (precioMaxi === "-") {
+            let link = $maxi('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
+            if (link) {
+                if (link.startsWith('/')) link = 'https://www.maxidescuento.com.ar' + link;
+                console.log(`   ➡️ Entrando al link interno: ${link}`);
+                const resMaxi2 = await axios.get(link, configAxios);
+                precioMaxi = buscarPrecioEnHTML(cheerio.load(resMaxi2.data)) || "-";
+            }
+        }
+        console.log(`   ✅ Precio Maxi final: ${precioMaxi}`);
+    } catch (error) {
+        console.error(`   ❌ Error Maxi: ${error.response ? error.response.status : error.message}`);
+    }
+
+    res.json({ exito: true, codigo: codigo, coco: precioCoco, maxi: precioMaxi });
 });
 
 
@@ -180,7 +175,6 @@ app.post('/modificar-precio', async (req, res) => {
         if (respuestaScanntech.ok) {
             const dataJSON = await respuestaScanntech.json();
             
-            // Disparo de fondo al Excel
             try {
                 const payloadExcel = req.body.nuevos.map(item => ({
                     codigo: item.codigoBarras || item.codigoExterno || item.codigo,
