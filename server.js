@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
 const app = express();
 app.use(cors()); 
@@ -17,6 +19,64 @@ const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3
 
 // 1. BUSCADOR INTELIGENTE: BARRAS O PLU (CÓDIGO EXTERNO)
 app.get('/buscar/:codigo', async (req, res) => {
+app.get('/rastrear-precios/:codigo', async (req, res) => {
+    const codigo = req.params.codigo.trim();
+    
+    // Valores por defecto por si no los encuentran o no los trabajan
+    let precioCoco = "-";
+    let precioMaxi = "-";
+
+    try {
+        // 1. ARAÑA PARA SUPER COCO
+        // Simulamos que escribimos el código de barras en su buscador
+        const urlCoco = `https://supercoco.com.ar/search/?q=${codigo}`;
+        
+        const responseCoco = await axios.get(urlCoco, {
+            // Nos disfrazamos de navegador normal para que no nos bloqueen
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        
+        // Cargamos la página con la lupa (Cheerio)
+        const $coco = cheerio.load(responseCoco.data);
+        
+        // Buscamos las clases de diseño web más comunes donde se guardan los precios
+        let textoPrecioCoco = $coco('.price, .precio, .woocommerce-Price-amount, .js-price-display').first().text();
+        
+        if (textoPrecioCoco && textoPrecioCoco.includes('$')) {
+            // Limpiamos la basura (dejamos solo números, puntos y comas)
+            precioCoco = textoPrecioCoco.replace(/[^\d.,]/g, '').trim();
+        }
+    } catch (error) {
+        console.log(`[RASTREADOR] Super Coco falló para el código: ${codigo}`);
+    }
+
+    try {
+        // 2. ARAÑA PARA MAXIDESCUENTO
+        const urlMaxi = `https://www.maxidescuento.com.ar/search/?q=${codigo}`;
+        
+        const responseMaxi = await axios.get(urlMaxi, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        
+        const $maxi = cheerio.load(responseMaxi.data);
+        
+        let textoPrecioMaxi = $maxi('.price, .precio, .woocommerce-Price-amount, .js-price-display').first().text();
+        
+        if (textoPrecioMaxi && textoPrecioMaxi.includes('$')) {
+            precioMaxi = textoPrecioMaxi.replace(/[^\d.,]/g, '').trim();
+        }
+    } catch (error) {
+        console.log(`[RASTREADOR] Maxidescuento falló para el código: ${codigo}`);
+    }
+
+    // Le devolvemos el informe al Excel
+    res.json({
+        exito: true,
+        codigo: codigo,
+        coco: precioCoco,
+        maxi: precioMaxi
+    });
+});
 const codigoLeido = req.params.codigo;
 try {
 let urlBasica = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/datos-basicos-articulos?filter=codigoBarras%253AEQ%253A${codigoLeido}`;
