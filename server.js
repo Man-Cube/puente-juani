@@ -19,22 +19,30 @@ const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycbzJA-NORIlhN3
 // =======================================================
 // 0. MOTOR RASTREADOR DE PRECIOS COMPETENCIA V3 (INTELIGENTE)
 // =======================================================
+// =======================================================
+// 0. MOTOR RASTREADOR V4 (ANTI-PATOVICA Y MULTI-BÚSQUEDA)
+// =======================================================
 app.get('/rastrear-precios/:codigo', async (req, res) => {
     const codigo = req.params.codigo.trim();
     let precioCoco = "-";
     let precioMaxi = "-";
 
-    // Nos disfrazamos de un Google Chrome de escritorio real
-    const configAxios = {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'es-AR,es;q=0.8,en-US;q=0.5,en;q=0.3',
-        },
-        timeout: 10000 // Si tarda más de 10 seg, aborta para no colgar el Excel
+    // El traje de camuflaje de altísima tecnología para pasar el 403
+    const headersCamuflaje = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'es-AR,es;q=0.8,en-US;q=0.5,en;q=0.3',
+        'Sec-Ch-Ua': '"Chromium";v="122", "Google Chrome";v="122", "Not-A.Brand";v="99"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1'
     };
 
-    // Función que extrae y limpia el precio sin importar dónde esté
+    // Función que extrae y limpia el precio sin importar dónde lo escondan
     const buscarPrecioEnHTML = ($) => {
         let p = $('meta[itemprop="price"]').attr('content') || $('[itemprop="price"]').attr('content');
         if (!p) {
@@ -50,48 +58,78 @@ app.get('/rastrear-precios/:codigo', async (req, res) => {
         return p && !isNaN(parseFloat(p)) ? parseFloat(p).toFixed(2) : null;
     };
 
+    // --- 1. SUPER COCO (Buscando la URL correcta para evitar el 404) ---
     try {
-        console.log(`\n🕵️ [RASTREADOR] Buscando ${codigo} en Super Coco...`);
-        const resCoco = await axios.get(`https://supercoco.com.ar/search/?q=${codigo}`, configAxios);
-        let $coco = cheerio.load(resCoco.data);
+        console.log(`\n🕵️ [RASTREADOR] Intentando Super Coco...`);
         
-        // Intento 1: ¿El precio ya está a la vista? (Redirección o grilla)
-        precioCoco = buscarPrecioEnHTML($coco) || "-";
+        // Probamos las 3 terminaciones de buscadores más comunes
+        const urlsCoco = [
+            `https://supercoco.com.ar/?s=${codigo}`,
+            `https://supercoco.com.ar/buscar?q=${codigo}`,
+            `https://supercoco.com.ar/catalogsearch/result/?q=${codigo}`
+        ];
 
-        // Intento 2: Si no hay precio a la vista, buscamos el link de la foto y entramos
-        if (precioCoco === "-") {
-            let link = $coco('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
-            if (link) {
-                if (link.startsWith('/')) link = 'https://supercoco.com.ar' + link;
-                console.log(`   ➡️ Entrando al link interno: ${link}`);
-                const resCoco2 = await axios.get(link, configAxios);
-                precioCoco = buscarPrecioEnHTML(cheerio.load(resCoco2.data)) || "-";
+        let $coco = null;
+        let urlFuncionando = false;
+
+        for (let url of urlsCoco) {
+            console.log(`   ➡️ Probando URL: ${url}`);
+            const reqCoco = await fetch(url, { headers: headersCamuflaje });
+            if (reqCoco.ok) {
+                const htmlCoco = await reqCoco.text();
+                $coco = cheerio.load(htmlCoco);
+                urlFuncionando = true;
+                break;
+            }
+        }
+
+        if (urlFuncionando && $coco) {
+            precioCoco = buscarPrecioEnHTML($coco) || "-";
+            if (precioCoco === "-") {
+                let link = $coco('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
+                if (link) {
+                    if (link.startsWith('/')) link = 'https://supercoco.com.ar' + link;
+                    console.log(`   ➡️ Entrando al producto: ${link}`);
+                    const reqProd = await fetch(link, { headers: headersCamuflaje });
+                    const htmlProd = await reqProd.text();
+                    precioCoco = buscarPrecioEnHTML(cheerio.load(htmlProd)) || "-";
+                }
             }
         }
         console.log(`   ✅ Precio Coco final: ${precioCoco}`);
     } catch (error) {
-        console.error(`   ❌ Error Coco: ${error.response ? error.response.status : error.message}`);
+        console.error(`   ❌ Error Coco: ${error.message}`);
     }
 
+    // --- 2. MAXIDESCUENTO (Blando el 403 con Fetch nativo) ---
     try {
-        console.log(`\n🕵️ [RASTREADOR] Buscando ${codigo} en Maxidescuento...`);
-        const resMaxi = await axios.get(`https://www.maxidescuento.com.ar/search/?q=${codigo}`, configAxios);
-        let $maxi = cheerio.load(resMaxi.data);
+        console.log(`\n🕵️ [RASTREADOR] Intentando Maxidescuento...`);
+        const searchUrlMaxi = `https://www.maxidescuento.com.ar/buscar?q=${codigo}`;
         
-        precioMaxi = buscarPrecioEnHTML($maxi) || "-";
+        // Usamos el fetch camuflado para engañar a Cloudflare
+        const reqMaxi = await fetch(searchUrlMaxi, { headers: headersCamuflaje });
+        
+        if (!reqMaxi.ok) {
+            console.log(`   ❌ Maxidescuento rebotó con código: ${reqMaxi.status}`);
+        } else {
+            const htmlMaxi = await reqMaxi.text();
+            let $maxi = cheerio.load(htmlMaxi);
+            precioMaxi = buscarPrecioEnHTML($maxi) || "-";
 
-        if (precioMaxi === "-") {
-            let link = $maxi('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
-            if (link) {
-                if (link.startsWith('/')) link = 'https://www.maxidescuento.com.ar' + link;
-                console.log(`   ➡️ Entrando al link interno: ${link}`);
-                const resMaxi2 = await axios.get(link, configAxios);
-                precioMaxi = buscarPrecioEnHTML(cheerio.load(resMaxi2.data)) || "-";
+            if (precioMaxi === "-") {
+                let link = $maxi('.product-miniature a, .thumbnail-container a, .product-title a').first().attr('href');
+                if (link) {
+                    if (link.startsWith('/')) link = 'https://www.maxidescuento.com.ar' + link;
+                    console.log(`   ➡️ Entrando al producto: ${link}`);
+                    const reqProd = await fetch(link, { headers: headersCamuflaje });
+                    const htmlProd = await reqProd.text();
+                    precioMaxi = buscarPrecioEnHTML(cheerio.load(htmlProd)) || "-";
+                }
             }
         }
         console.log(`   ✅ Precio Maxi final: ${precioMaxi}`);
     } catch (error) {
-        console.error(`   ❌ Error Maxi: ${error.response ? error.response.status : error.message}`);
+        console.error(`   ❌ Error Maxi: ${error.message}`);
     }
 
     res.json({ exito: true, codigo: codigo, coco: precioCoco, maxi: precioMaxi });
