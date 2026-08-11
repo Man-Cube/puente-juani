@@ -126,6 +126,9 @@ app.get('/rastrear-precios/:codigo', async (req, res) => {
 // =======================================================
 // 1. BUSCADOR INTELIGENTE: BARRAS O PLU (CÓDIGO EXTERNO)
 // =======================================================
+// =======================================================
+// 1. BUSCADOR INTELIGENTE: BARRAS O PLU (CON HISTORIAL)
+// =======================================================
 app.get('/buscar/:codigo', async (req, res) => {
     const codigoLeido = req.params.codigo;
     try {
@@ -146,16 +149,69 @@ app.get('/buscar/:codigo', async (req, res) => {
         }
 
         const codigoInterno = art.codigo;
+        
+        // 1. Buscamos el artículo pesado
         const urlPesada = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}?disponibilidadDistribucion=%7B%22fecha%22:null,%22tipoDisponibilidadDistribucion%22:%22IMMEDIATE%22%7D&filter=codigoListaPrecioVenta%253AEQ%253A3163`;
-        const resPesada = await fetch(urlPesada, { method: "GET", headers: headersScanntech });
-        const articuloCompleto = await resPesada.json();
+        
+        // 2. Calculamos la fecha de hace 6 meses para el historial
+        const hace6Meses = new Date();
+        hace6Meses.setMonth(hace6Meses.getMonth() - 6);
+        const fechaDesdeStr = hace6Meses.toISOString().split('T')[0];
+        
+        // 3. Armamos la URL maestra que descubriste
+        const urlHistorial = `https://backend-k8.scanntech.com/be-modulos-precios-angular-2.132.30-MINARG/api/articulos/${codigoInterno}/historico-ventas?filter=fechaDesde%253AGE%253A${fechaDesdeStr}`;
+        
+        // Hacemos los dos pedidos a Scanntech al mismo tiempo (para ir a las chapas)
+        const [resPesada, resHistorial] = await Promise.all([
+            fetch(urlPesada, { method: "GET", headers: headersScanntech }),
+            fetch(urlHistorial, { method: "GET", headers: headersScanntech }).catch(() => null)
+        ]);
 
-        res.json({ exito: true, articulo: articuloCompleto });
+        const articuloCompleto = await resPesada.json();
+        
+        // --- MAGIA: Procesar el historial y los días ---
+        let ultimaFecha = "Sin datos recientes";
+        let diasAntiguedad = 0;
+        
+        if (resHistorial && resHistorial.ok) {
+            const histData = await resHistorial.json();
+            const lista = histData.content || (Array.isArray(histData) ? histData : []);
+            
+            if (lista.length > 0) {
+                // Agarramos el primer registro (el más nuevo)
+                const fStr = lista[0].ingreso || lista[0].vigencia || lista[0].fecha;
+                if (fStr) {
+                    ultimaFecha = fStr; 
+                    
+                    // Calculamos los días que pasaron
+                    let dateObj;
+                    if (typeof fStr === 'number') {
+                        dateObj = new Date(fStr);
+                    } else if (fStr.includes('/')) {
+                        const parts = fStr.split(' ')[0].split('/'); // "11/08/2026"
+                        if (parts.length === 3) dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                    } else {
+                        dateObj = new Date(fStr);
+                    }
+                    
+                    if (dateObj && !isNaN(dateObj)) {
+                        const diffTime = Math.abs(new Date() - dateObj);
+                        diasAntiguedad = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                    }
+                }
+            }
+        }
+
+        res.json({ 
+            exito: true, 
+            articulo: articuloCompleto, 
+            ultimaFecha: ultimaFecha,
+            diasAntiguedad: diasAntiguedad 
+        });
     } catch (error) {
         res.status(500).json({ exito: false, error: "Error interno en buscador" });
     }
 });
-
 // =======================================================
 // 2. BUSCADOR DIRECTO POR ID INTERNO
 // =======================================================
